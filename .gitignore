@@ -1,0 +1,15 @@
+out/
+CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+
+.vs/
+*.user
+
+*.log
+*.tlog
+*.idb
+*.pdb
+
+resources/*.bat
+resources/*.spv

@@ -1,0 +1,11 @@
+{
+  "name": "vulkan-base-project",
+  "version": "0.1.0",
+  "dependencies": [
+    "glfw3",
+    "glm",
+    "stb",
+    "tinyobjloader"
+  ],
+  "builtin-baseline": "b62515d30d8dad5a3b075754ff4401ea01e8aa5c"
+}

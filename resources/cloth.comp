@@ -1,0 +1,134 @@
+#version 450
+
+// 10x10 threads per workgroup
+layout(local_size_x = 10, local_size_y = 10, local_size_z = 1) in;
+
+// Simulation parameters (binding = 0, std140 to match C++)
+layout(std140, binding = 0) uniform SimParams {
+    vec3 gravity;
+    float particleMass;
+
+    float springK;
+    float restLengthVert;
+    float restLengthHoriz;
+    float restLengthDiag;
+
+    float dampingConst;
+    float particleInvMass;
+    float deltaT;
+    float pad; // padding to 16 bytes
+} params;
+
+// Position buffer (binding = 1)
+layout(std430, binding = 1) buffer PosBuffer {
+    vec4 Position[]; // xyz = position, w unused/1.0
+};
+
+// Velocity buffer (binding = 2)
+layout(std430, binding = 2) buffer VelBuffer {
+    vec4 Velocity[]; // xyz = velocity, w unused
+};
+
+void main() {
+    // Number of particles in each dimension (should be 50x50)
+    uvec3 numParticles = gl_NumWorkGroups * gl_WorkGroupSize;
+
+    // Global index in 1D
+    uint ix = gl_GlobalInvocationID.x;
+    uint iy = gl_GlobalInvocationID.y;
+
+    if (ix >= numParticles.x || iy >= numParticles.y) {
+        return;
+    }
+
+    uint index = iy * numParticles.x + ix;
+
+    vec3 p = Position[index].xyz;
+
+    // Pinning: fix some vertices at the top row
+    if (iy == numParticles.y - 1u/* &&
+        (ix == 0u ||
+         ix == numParticles.x / 4u ||
+         ix == numParticles.x * 2u / 4u ||
+         ix == numParticles.x * 3u / 4u ||
+         ix == numParticles.x - 1u)*/) {
+
+        Position[index] = vec4(p, 1.0);
+        Velocity[index] = vec4(0.0); // keep pinned still
+        return;
+    }
+
+    vec3 force = params.gravity * params.particleMass;
+    vec3 v;
+    uint idxN;
+
+    // ABOVE (iy+1)
+    if (iy < numParticles.y - 1u) {
+        idxN = (iy + 1u) * numParticles.x + ix;
+        v = Position[idxN].xyz - p;
+        force += normalize(v) * params.springK * (length(v) - params.restLengthVert);
+    }
+
+    // BELOW (iy-1)
+    if (iy > 0u) {
+        idxN = (iy - 1u) * numParticles.x + ix;
+        v = Position[idxN].xyz - p;
+        force += normalize(v) * params.springK * (length(v) - params.restLengthVert);
+    }
+
+    // LEFT (ix-1)
+    if (ix > 0u) {
+        idxN = iy * numParticles.x + (ix - 1u);
+        v = Position[idxN].xyz - p;
+        force += normalize(v) * params.springK * (length(v) - params.restLengthHoriz);
+    }
+
+    // RIGHT (ix+1)
+    if (ix < numParticles.x - 1u) {
+        idxN = iy * numParticles.x + (ix + 1u);
+        v = Position[idxN].xyz - p;
+        force += normalize(v) * params.springK * (length(v) - params.restLengthHoriz);
+    }
+
+    // DIAGONALS
+    // Top-left
+    if (ix > 0u && iy < numParticles.y - 1u) {
+        idxN = (iy + 1u) * numParticles.x + (ix - 1u);
+        v = Position[idxN].xyz - p;
+        force += normalize(v) * params.springK * (length(v) - params.restLengthDiag);
+    }
+
+    // Top-right
+    if (ix < numParticles.x - 1u && iy < numParticles.y - 1u) {
+        idxN = (iy + 1u) * numParticles.x + (ix + 1u);
+        v = Position[idxN].xyz - p;
+        force += normalize(v) * params.springK * (length(v) - params.restLengthDiag);
+    }
+
+    // Bottom-left
+    if (ix > 0u && iy > 0u) {
+        idxN = (iy - 1u) * numParticles.x + (ix - 1u);
+        v = Position[idxN].xyz - p;
+        force += normalize(v) * params.springK * (length(v) - params.restLengthDiag);
+    }
+
+    // Bottom-right (note the +1 in x, -1 in y)
+    if (ix < numParticles.x - 1u && iy > 0u) {
+        idxN = (iy - 1u) * numParticles.x + (ix + 1u);
+        v = Position[idxN].xyz - p;
+        force += normalize(v) * params.springK * (length(v) - params.restLengthDiag);
+    }
+
+    vec3 vel = Velocity[index].xyz;
+
+    // Damping
+    force += -vel * params.dampingConst;
+
+    // Semi-implicit Euler integration
+    vec3 a = force * params.particleInvMass;
+    vec3 newVel = vel + a * params.deltaT;
+    vec3 newPos = p + newVel * params.deltaT + 0.5 * a * params.deltaT * params.deltaT;
+
+    Position[index] = vec4(newPos, 1.0);
+    Velocity[index] = vec4(newVel, 0.0);
+}
