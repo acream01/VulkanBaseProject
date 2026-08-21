@@ -11,6 +11,7 @@ add_executable(VulkanBaseProject
 	src/main.cpp
 	src/Vertex.hpp
 	src/Debugging.hpp
+	src/Application.hpp
 )
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)
