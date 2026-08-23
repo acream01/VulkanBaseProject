@@ -17,6 +17,9 @@
 #include "Vertex.hpp"
 #include "Debugging.hpp"
 #include "Utils.hpp"
+#include "Config.hpp"
+#include "Window.hpp"
+
 //#include "Types.hpp"
 //#include "Config.hpp"
 
@@ -33,16 +36,12 @@
 #include <algorithm> // Necessary for std::clamp
 #include <fstream> // Necessary for file management
 #include <array>
+#include <memory>
 
-const uint32_t WIDTH = 800;
-const uint32_t HEIGHT = 600;
 const int MAX_FRAMES_IN_FLIGHT = 2;
 
 const uint32_t GRID_SIZE_X = 50;
 const uint32_t GRID_SIZE_Y = 50;
-
-inline bool clothSpinning = false; //Bit of a misnomer, but spins the cloth
-inline int flipGrav = 1;
 
 const std::string MODEL_PATH = "../resources/models/clothplane.obj";
 //const std::string MODEL_PATH = "../resources/models/sphereWTex.obj";
@@ -99,14 +98,14 @@ const bool enableValidationLayers = true;
 class Application {
 public:
     void run() {
-        initWindow();
+        window = std::make_unique<Window>(WIDTH, HEIGHT, "Vulkan");
         initVulkan();
         mainLoop();
         cleanup();
     }
 
 private:
-    GLFWwindow* window = nullptr;
+    std::unique_ptr<Window> window;
     VkInstance instance;
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE; // init physical device/graphics card
     VkDevice device; //Logical Device
@@ -184,8 +183,7 @@ private:
     //Fences are used to pause the CPU until a GPU process is complete used 
     std::vector<VkFence> inFlightFences;
     uint32_t currentFrame = 0;
-    bool framebufferResized = false; // in case driver doesnt catch resizing
-
+    
     const std::vector<const char*> deviceExtensions = {
            VK_KHR_SWAPCHAIN_EXTENSION_NAME
     };
@@ -195,56 +193,6 @@ private:
         "VK_LAYER_KHRONOS_validation" // bundled layer
     };
 
-
-    //void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-    //    if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
-    //        glfwSetWindowShouldClose(window, true);
-    //    }
-    //}
-
-    void initWindow() {
-        glfwInit(); // inits the library
-
-        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API); // disable defaulting to OpenGL
-        //glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE); // disabke window resizing for now
-
-        // window(width, height, title, specify monitor, openglOnly)
-        window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr); // init default window
-        glfwSetWindowUserPointer(window, this);
-        glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
-        glfwSetKeyCallback(window, keyCallback);
-
-    }
-
-    static void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
-        auto app = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
-        app->framebufferResized = true;
-    }
-
-    static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-        auto app = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
-
-        if (action == GLFW_PRESS) {
-            switch (key) {
-            case GLFW_KEY_ESCAPE:
-                glfwSetWindowShouldClose(window, GLFW_TRUE);
-                break;
-
-                // Example: add your own controls here
-                // case GLFW_KEY_SPACE:
-                //     app->togglePause();
-                //     break;
-            case GLFW_KEY_R:
-                clothSpinning = !clothSpinning;
-                break;
-            case GLFW_KEY_G:
-                flipGrav *= -1;
-                break;
-            default:
-                break;
-            }
-        }
-    }
 
     // creates instance of vulkan (connection between app and the Vulkan library)
     void createInstance() {
@@ -291,10 +239,9 @@ private:
     }
 
     void createSurface() {
-        if (glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) {
-            throw std::runtime_error("failed to create window surface!");
-        }
+        surface = window->createSurface(instance);
     }
+ 
 
     // checks what extensions are supported by vulkan
     void checkSupportedExtensions() {
@@ -558,7 +505,7 @@ private:
         }
         else {
             int width, height;
-            glfwGetFramebufferSize(window, &width, &height);
+            glfwGetFramebufferSize(window->getGLFWwindow(), &width, &height);
 
             VkExtent2D actualExtent = {
                 static_cast<uint32_t>(width),
@@ -656,9 +603,9 @@ private:
     void recreateSwapChain() {
 
         int width = 0, height = 0;
-        glfwGetFramebufferSize(window, &width, &height); // populate width and height
+        glfwGetFramebufferSize(window->getGLFWwindow(), &width, &height); // populate width and height
         while (width == 0 || height == 0) { // check if the window is minimized
-            glfwGetFramebufferSize(window, &width, &height);
+            glfwGetFramebufferSize(window->getGLFWwindow(), &width, &height);
             glfwWaitEvents(); // wait until window event occurs (close, maximize, etc.)
         }
 
@@ -2088,7 +2035,7 @@ private:
     // connects application to vulkan
     void initVulkan() {
         createInstance();
-        createSurface(); // platform agnostic with GLFW
+        createSurface(); // platform agnostic with GLFW, using Window class
         pickPhysicalDevice();
         createLogicalDevice();
         createSwapChain(); //  get format, present mode, extent
@@ -2129,8 +2076,8 @@ private:
 
     // renders a single frame 
     void mainLoop() {
-        while (!glfwWindowShouldClose(window)) {
-            glfwPollEvents();
+        while (!window->shouldClose()) {
+            window->pollEvents();
             drawFrame();
         }
     }
@@ -2202,8 +2149,10 @@ private:
 
         result = vkQueuePresentKHR(presentQueue, &presentInfo);
 
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || result == framebufferResized) {
-            framebufferResized = false;
+        window->resetFramebufferResizedFlag();
+
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || window->wasFramebufferResized()) {
+            window->resetFramebufferResizedFlag();
             recreateSwapChain();
         }
         else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
@@ -2218,6 +2167,8 @@ private:
 
 
     void cleanup() {
+        //Wait for GPU to complete excecution before cleanup
+        vkDeviceWaitIdle(device);
         // CLEAN UP ALL OBJECTS BEFORE DESTROYING INSTANCE
         cleanupSwapChain();
 
@@ -2273,7 +2224,6 @@ private:
         vkDestroyDevice(device, nullptr);
         vkDestroySurfaceKHR(instance, surface, nullptr);
         vkDestroyInstance(instance, nullptr); // nullptr is optional allocator callback
-        glfwDestroyWindow(window);
-        glfwTerminate();
+        //unique_ptr<Window> deconstructs automatically at the end of Application
     }
 };

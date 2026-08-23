@@ -1,24 +1,28 @@
-#include "Application.hpp"
+#include "Window.hpp"
+#include <stdexcept>
 
-void Application::initWindow() {
+Window::Window(uint32_t width, uint32_t height, const char* title) {
     glfwInit();
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
-    window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+    window = glfwCreateWindow(width, height, title, nullptr, nullptr);
     glfwSetWindowUserPointer(window, this);
     glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
     glfwSetKeyCallback(window, keyCallback);
 }
 
-void Application::framebufferResizeCallback(GLFWwindow* window, int width, int height) {
-    auto app = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
-    app->framebufferResized = true;
+Window::~Window() {
+    glfwDestroyWindow(window);
+    glfwTerminate();
 }
 
-void Application::keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-    auto app = reinterpret_cast<Application*>(glfwGetWindowUserPointer(window));
+void Window::framebufferResizeCallback(GLFWwindow* window, int width, int height) {
+    auto win = reinterpret_cast<Window*>(glfwGetWindowUserPointer(window));
+    win->framebufferResized = true;
+}
 
+void Window::keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     if (action == GLFW_PRESS) {
         switch (key) {
         case GLFW_KEY_ESCAPE:
@@ -36,8 +40,10 @@ void Application::keyCallback(GLFWwindow* window, int key, int scancode, int act
     }
 }
 
-void Application::createSurface() {
+VkSurfaceKHR Window::createSurface(VkInstance instance) const {
+    VkSurfaceKHR surface;
     if (glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS) {
         throw std::runtime_error("failed to create window surface!");
     }
+    return surface;
 }

@@ -9,9 +9,13 @@ project ("VulkanBaseProject")
 
 add_executable(VulkanBaseProject
 	src/main.cpp
+	src/Application.hpp
+	src/Window.hpp
+	src/Window.cpp
+	src/Config.hpp
 	src/Vertex.hpp
 	src/Debugging.hpp
-	src/Application.hpp
+	src/Utils.hpp
 )
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)
