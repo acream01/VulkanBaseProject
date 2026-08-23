@@ -19,6 +19,7 @@
 #include "Utils.hpp"
 #include "Config.hpp"
 #include "Window.hpp"
+#include "QueueFamily.hpp"
 
 //#include "Types.hpp"
 //#include "Config.hpp"
@@ -273,7 +274,7 @@ private:
 
     bool isDeviceSuitable(VkPhysicalDevice device) {
         //Check if device has queue family funcionality we require
-        QueueFamilyIndices indices = findQueueFamilies(device);
+        QueueFamilyIndices indices = findQueueFamilies(device, surface);
 
         bool extensionsSupported = checkDeviceExtensionSupport(device);
 
@@ -337,7 +338,7 @@ private:
     // Currently configures for multiple queues, even if they are likely the same queues
     void createLogicalDevice() {
         //Create device queue info struct to initialize the vulkan object
-        QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
+        QueueFamilyIndices indices = findQueueFamilies(physicalDevice, surface);
 
         std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
         std::set<uint32_t> uniqueQueueFamilies = { indices.graphicsFamily.value(), indices.presentFamily.value() };
@@ -392,51 +393,6 @@ private:
 
     }
 
-    //Queue Families set up
-    //A queue family is essentially groups on the GPU hardware that are designed to be handled together
-    // Examples include geometry, computes, etc
-
-    struct QueueFamilyIndices {
-        std::optional<uint32_t> graphicsFamily; // init for drawing to buffer 
-        std::optional<uint32_t> presentFamily; // init queue for writing to surface 
-
-        bool isComplete() {
-            return graphicsFamily.has_value() && presentFamily.has_value();
-        }
-
-    };
-
-    QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device) {
-        //Investigates the Hardware for queue families
-        QueueFamilyIndices indices;
-        uint32_t queueFamilyCount = 0;
-
-        vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
-
-        std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
-        vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
-
-        int i = 0;
-        for (const auto& queueFamily : queueFamilies) {
-            if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-                indices.graphicsFamily = i; // init for drawing to buff
-            }
-
-            VkBool32 presentSupport = false;
-            vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentSupport);
-            if (presentSupport) {
-                indices.presentFamily = i; // init for drawing to surface TODO check for combined support -c
-            }
-
-            if (indices.isComplete()) {
-                break;
-            }
-
-            i++;
-        }
-
-        return indices;
-    }
 
     //Checking for swap chain support
     struct SwapChainSupportDetails {
@@ -546,7 +502,7 @@ private:
         createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
         //Updating the Graphics Queue Family with our new information
-        QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
+        QueueFamilyIndices indices = findQueueFamilies(physicalDevice, surface);
         uint32_t queueFamilyIndices[] = { indices.graphicsFamily.value(), indices.presentFamily.value() };
 
         if (indices.graphicsFamily != indices.presentFamily) {
@@ -995,7 +951,7 @@ private:
 
     // allows us to make draw calls
     void createCommandPool() {
-        QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
+        QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice, surface);
 
         VkCommandPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;

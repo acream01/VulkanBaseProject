@@ -13,9 +13,12 @@ add_executable(VulkanBaseProject
 	src/Window.hpp
 	src/Window.cpp
 	src/Config.hpp
+	src/QueueFamily.cpp
+	src/QueueFamily.hpp
 	src/Vertex.hpp
 	src/Debugging.hpp
 	src/Utils.hpp
+
 )
 
 if (CMAKE_VERSION VERSION_GREATER 3.12)
