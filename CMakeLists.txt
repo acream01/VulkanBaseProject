@@ -15,6 +15,8 @@ add_executable(VulkanBaseProject
 	src/Config.hpp
 	src/QueueFamily.cpp
 	src/QueueFamily.hpp
+	src/Device.hpp
+	src/Device.cpp
 	src/Vertex.hpp
 	src/Debugging.hpp
 	src/Utils.hpp

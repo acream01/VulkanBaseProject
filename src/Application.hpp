@@ -20,6 +20,7 @@
 #include "Config.hpp"
 #include "Window.hpp"
 #include "QueueFamily.hpp"
+#include "Device.hpp"
 
 //#include "Types.hpp"
 //#include "Config.hpp"
@@ -107,12 +108,17 @@ public:
 
 private:
     std::unique_ptr<Window> window;
+    
     VkInstance instance;
-    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE; // init physical device/graphics card
-    VkDevice device; //Logical Device
     VkSurfaceKHR surface; // window surface to screen
-    VkQueue graphicsQueue; //Graphics queue and Present queue families are often the same, but hardware dependent so we handle both.
+    
+    //device
+    std::unique_ptr<Device> deviceObj;
+    VkDevice device;
+    VkPhysicalDevice physicalDevice;
+    VkQueue graphicsQueue;
     VkQueue presentQueue;
+
     // swapchain-------------
     VkSwapchainKHR swapChain; //Swap chain is how vulkan handles the frames in order- framebuffer settings and vsync settings etc
     std::vector<VkImage> swapChainImages;
@@ -272,127 +278,7 @@ private:
         return extensions;
     }
 
-    bool isDeviceSuitable(VkPhysicalDevice device) {
-        //Check if device has queue family funcionality we require
-        QueueFamilyIndices indices = findQueueFamilies(device, surface);
-
-        bool extensionsSupported = checkDeviceExtensionSupport(device);
-
-        bool swapChainAdequate = false;
-        if (extensionsSupported) {
-            SwapChainSupportDetails swapChainSupport = querySwapChainSupport(device);
-            swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
-        }
-
-
-        VkPhysicalDeviceFeatures supportedFeatures;
-        vkGetPhysicalDeviceFeatures(device, &supportedFeatures);
-        return indices.isComplete() && extensionsSupported && swapChainAdequate && supportedFeatures.samplerAnisotropy;
-
-    }
-
-    bool checkDeviceExtensionSupport(VkPhysicalDevice device) {
-        //Checks if the hardware has a color mode and a presentation mode supported
-        uint32_t extensionCount;
-        vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
-
-        std::vector<VkExtensionProperties> availableExtensions(extensionCount);
-        vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, availableExtensions.data());
-
-        std::set<std::string> requiredExtensions(deviceExtensions.begin(), deviceExtensions.end());
-
-        for (const auto& extension : availableExtensions) {
-            requiredExtensions.erase(extension.extensionName);
-        }
-
-        return requiredExtensions.empty();
-
-    }
-
-    // check for suitable graphics card, selects one
-    void pickPhysicalDevice() {
-        uint32_t deviceCount = 0;
-        vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr); // query number of graphics card
-
-        if (deviceCount == 0) {
-            throw std::runtime_error("failed to find GPUs with Vulkan support!"); // this would be bad and sad
-        }
-
-        std::vector<VkPhysicalDevice> devices(deviceCount); // holds all device handles
-        vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
-
-        for (const auto& device : devices) { // check all devices for suitable graphics card
-            if (isDeviceSuitable(device)) {
-                physicalDevice = device;
-                break;
-            }
-        }
-
-        if (physicalDevice == VK_NULL_HANDLE) {
-            throw std::runtime_error("failed to find a suitable GPU!");
-        }
-
-    }
-
-    //Creating a logical device to interface with the physical device
-    // Currently configures for multiple queues, even if they are likely the same queues
-    void createLogicalDevice() {
-        //Create device queue info struct to initialize the vulkan object
-        QueueFamilyIndices indices = findQueueFamilies(physicalDevice, surface);
-
-        std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
-        std::set<uint32_t> uniqueQueueFamilies = { indices.graphicsFamily.value(), indices.presentFamily.value() };
-
-        //assign priorities to queues to influence the scheduling of command buffer execution using floats between 0.0 and 1.0
-        //This is required even if there is only a single queue:
-        float queuePriority = 1.0f; // TODO look into meaning -c
-        for (uint32_t queueFamily : uniqueQueueFamilies) {
-            VkDeviceQueueCreateInfo queueCreateInfo{};
-            queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-            queueCreateInfo.queueFamilyIndex = queueFamily;
-            queueCreateInfo.queueCount = 1;
-            queueCreateInfo.pQueuePriorities = &queuePriority;
-            queueCreateInfos.push_back(queueCreateInfo);
-        }
-
-        //This is where we specify the physical device features we're gonna be using 
-        //TODO: I think we will likely need to come back to this to activate compute shaders -A
-        VkPhysicalDeviceFeatures deviceFeatures{};
-        deviceFeatures.samplerAnisotropy = VK_TRUE;
-
-        // creating the logical device struct
-        VkDeviceCreateInfo createInfo{};
-
-        createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-
-        createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
-        createInfo.pQueueCreateInfos = queueCreateInfos.data(); //pointer to the queue info
-
-        createInfo.pEnabledFeatures = &deviceFeatures; //pointer to the device features
-
-        //Set up validation layers to work with older versions of Vulkan
-        createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
-        createInfo.ppEnabledExtensionNames = deviceExtensions.data();
-
-        if (enableValidationLayers) {
-            createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
-            createInfo.ppEnabledLayerNames = validationLayers.data();
-        }
-        else {
-            createInfo.enabledLayerCount = 0;
-        }
-
-        // create logical device
-        if (vkCreateDevice(physicalDevice, &createInfo, nullptr, &device) != VK_SUCCESS) {
-            throw std::runtime_error("failed to create logical device!");
-        }
-
-        // retrieves queue handle
-        vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
-        vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
-
-    }
-
+   
 
     //Checking for swap chain support
     struct SwapChainSupportDetails {
@@ -1992,8 +1878,13 @@ private:
     void initVulkan() {
         createInstance();
         createSurface(); // platform agnostic with GLFW, using Window class
-        pickPhysicalDevice();
-        createLogicalDevice();
+        
+        deviceObj = std::make_unique<Device>(instance, surface, deviceExtensions, validationLayers, enableValidationLayers);
+        device = deviceObj->getDevice();
+        physicalDevice = deviceObj->getPhysicalDevice();
+        graphicsQueue = deviceObj->getGraphicsQueue();
+        presentQueue = deviceObj->getPresentQueue();
+
         createSwapChain(); //  get format, present mode, extent
         createImageViews(); // sets up using images as textures
         createRenderPass();
@@ -2177,7 +2068,9 @@ private:
 
         vkDestroyCommandPool(device, commandPool, nullptr);
 
-        vkDestroyDevice(device, nullptr);
+        //vkDestroyDevice(device, nullptr);
+        deviceObj.reset(); //Triggers device deconstructor manually calling vkDestroyDevice;
+
         vkDestroySurfaceKHR(instance, surface, nullptr);
         vkDestroyInstance(instance, nullptr); // nullptr is optional allocator callback
         //unique_ptr<Window> deconstructs automatically at the end of Application
