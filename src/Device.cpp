@@ -1,5 +1,6 @@
 #include "Device.hpp"
 #include "QueueFamily.hpp"
+#include "SwapChainSupport.hpp"
 
 #include <stdexcept>
 #include <set>
@@ -26,12 +27,8 @@ bool Device::isDeviceSuitable(VkPhysicalDevice device) {
 
     bool swapChainAdequate = false;
     if (extensionsSupported) {
-        // NOTE: swapchain support query stays here for now (temporary duplication)
-       //Replace when refactor Swapchain
-        uint32_t formatCount, presentModeCount;
-        vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, nullptr);
-        vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, nullptr);
-        swapChainAdequate = formatCount != 0 && presentModeCount != 0;
+       SwapChainSupportDetails swapChainSupport = querySwapChainSupport(device, surface);
+       swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
     }
 
 

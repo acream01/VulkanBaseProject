@@ -21,6 +21,10 @@
 #include "Window.hpp"
 #include "QueueFamily.hpp"
 #include "Device.hpp"
+#include "Swapchain.hpp"
+#include "SwapChainSupport.hpp"
+#include "ImageUtils.hpp"
+
 
 //#include "Types.hpp"
 //#include "Config.hpp"
@@ -120,11 +124,13 @@ private:
     VkQueue presentQueue;
 
     // swapchain-------------
+    std::unique_ptr<Swapchain> swapchainObj;
     VkSwapchainKHR swapChain; //Swap chain is how vulkan handles the frames in order- framebuffer settings and vsync settings etc
     std::vector<VkImage> swapChainImages;
     VkFormat swapChainImageFormat;
     VkExtent2D swapChainExtent;
     std::vector<VkImageView> swapChainImageViews;
+
     // pipeline----------------
     VkRenderPass renderPass;
     VkDescriptorSetLayout descriptorSetLayout; // UBO descriptor sets for passing info like MVP matrices
@@ -278,248 +284,17 @@ private:
         return extensions;
     }
 
-   
-
-    //Checking for swap chain support
-    struct SwapChainSupportDetails {
-        VkSurfaceCapabilitiesKHR capabilities;
-        std::vector<VkSurfaceFormatKHR> formats;
-        std::vector<VkPresentModeKHR> presentModes;
-    };
-
-    SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device) {
-        //We're checking what the hardware allows us to do with swapchains
-        SwapChainSupportDetails details;
-        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &details.capabilities);
-
-        //Physcial Device surface formats supported
-        uint32_t formatCount;
-        vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, nullptr);
-
-        if (formatCount != 0) {
-            details.formats.resize(formatCount);
-            vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, details.formats.data());
-        }
-
-        //Present Mode Checking
-        uint32_t presentModeCount;
-        vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, nullptr);
-
-        if (presentModeCount != 0) {
-            details.presentModes.resize(presentModeCount);
-            vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, details.presentModes.data());
-        }
-
-        return details;
-    }
-
-    //Surface Format
-    VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats) {
-        //Loop through availible formats and select BGRa format
-        for (const auto& availableFormat : availableFormats) {
-            if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-                return availableFormat;
-            }
-        }
-        //You COULD search through availible formats for the best one but anbgtft
-        return availableFormats[0];
-    }
-
-    VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes) {
-        //Present modes have positives and negatives, if we are running into visual bugs we should test with others
-        for (const auto& availablePresentMode : availablePresentModes) {
-            if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
-                //Mailbox mode 
-                //Instead of blocking the application when the queue is full,
-                //the images that are already queued are simply replaced with the newer ones
-                return availablePresentMode;
-            }
-        }
-        //Traditional VSync, availible on all hardware
-        return VK_PRESENT_MODE_FIFO_KHR;
-    }
-
-
-    VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities) {
-        //How is our screen working with pixels
-        if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
-            return capabilities.currentExtent;
-        }
-        else {
-            int width, height;
-            glfwGetFramebufferSize(window->getGLFWwindow(), &width, &height);
-
-            VkExtent2D actualExtent = {
-                static_cast<uint32_t>(width),
-                static_cast<uint32_t>(height)
-            };
-
-            actualExtent.width = std::clamp(actualExtent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
-            actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
-
-            return actualExtent;
-        }
-    }
-
-    void createSwapChain() {
-        SwapChainSupportDetails swapChainSupport = querySwapChainSupport(physicalDevice);
-
-        //Defined above
-        VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
-        VkPresentModeKHR presentMode = chooseSwapPresentMode(swapChainSupport.presentModes);
-        VkExtent2D extent = chooseSwapExtent(swapChainSupport.capabilities);
-
-        //Sets the number of images in the swapchain, 0 is a special value meaning no max, we are doing a specified number 
-        uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
-        if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.maxImageCount) {
-            imageCount = swapChainSupport.capabilities.maxImageCount;
-        }
-
-        //Making the struct to create the swapchain vulkan object
-        VkSwapchainCreateInfoKHR createInfo{};
-        createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-        createInfo.surface = surface;
-
-        createInfo.minImageCount = imageCount;
-        createInfo.imageFormat = surfaceFormat.format;
-        createInfo.imageColorSpace = surfaceFormat.colorSpace;
-        createInfo.imageExtent = extent;
-        createInfo.imageArrayLayers = 1;
-        createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
-        //Updating the Graphics Queue Family with our new information
-        QueueFamilyIndices indices = findQueueFamilies(physicalDevice, surface);
-        uint32_t queueFamilyIndices[] = { indices.graphicsFamily.value(), indices.presentFamily.value() };
-
-        if (indices.graphicsFamily != indices.presentFamily) {
-            createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
-            createInfo.queueFamilyIndexCount = 2;
-            createInfo.pQueueFamilyIndices = queueFamilyIndices;
-        }
-        else {
-            createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            createInfo.queueFamilyIndexCount = 0; // Optional
-            createInfo.pQueueFamilyIndices = nullptr; // Optional
-        }
-
-        //Lets us do transformations on the images that are inside a given buffer, i.e. Rotations or flipping
-        createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
-
-        //Vulkan has options to blend multiple windows color values together, we are just using opaque windows (standard)
-        createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-
-        createInfo.presentMode = presentMode;
-        createInfo.clipped = VK_TRUE;
-        //If we resize a window, we might need to make a new swap chain, this references the old one
-        createInfo.oldSwapchain = VK_NULL_HANDLE;
-
-        if (vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapChain) != VK_SUCCESS) {
-            throw std::runtime_error("failed to create swap chain!");
-        }
-
-        vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
-        swapChainImages.resize(imageCount);
-        vkGetSwapchainImagesKHR(device, swapChain, &imageCount, swapChainImages.data());
-        swapChainImageFormat = surfaceFormat.format;
-        swapChainExtent = extent;
-    }
-
-    void cleanupSwapChain() {
-
-        vkDestroyImageView(device, depthImageView, nullptr);
-        vkDestroyImage(device, depthImage, nullptr);
-        vkFreeMemory(device, depthImageMemory, nullptr);
-
-        for (auto framebuffer : swapChainFramebuffers) {
-            vkDestroyFramebuffer(device, framebuffer, nullptr);
-        }
-
-        for (auto imageView : swapChainImageViews) {
-            vkDestroyImageView(device, imageView, nullptr); // manual cleanup because manual creation
-        }
-
-        vkDestroySwapchainKHR(device, swapChain, nullptr);
-
-    }
-
     void recreateSwapChain() {
+        swapchainObj->recreate();
+        swapChain = swapchainObj->getSwapChain();
+        swapChainImages = swapchainObj->getImages();
+        swapChainImageFormat = swapchainObj->getImageFormat();
+        swapChainExtent = swapchainObj->getExtent();
+        swapChainImageViews = swapchainObj->getImageViews();
 
-        int width = 0, height = 0;
-        glfwGetFramebufferSize(window->getGLFWwindow(), &width, &height); // populate width and height
-        while (width == 0 || height == 0) { // check if the window is minimized
-            glfwGetFramebufferSize(window->getGLFWwindow(), &width, &height);
-            glfwWaitEvents(); // wait until window event occurs (close, maximize, etc.)
-        }
-
-        vkDeviceWaitIdle(device);
-        cleanupSwapChain();
-
-        createSwapChain();
-        createImageViews();
         createDepthResources();
         createFramebuffers();
     }
-
-    VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags) {
-        VkImageViewCreateInfo viewInfo{};
-        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = image;
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = format;
-        viewInfo.subresourceRange.aspectMask = aspectFlags;
-        //viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        viewInfo.subresourceRange.baseMipLevel = 0;
-        viewInfo.subresourceRange.levelCount = 1;
-        viewInfo.subresourceRange.baseArrayLayer = 0;
-        viewInfo.subresourceRange.layerCount = 1;
-
-        VkImageView imageView;
-        if (vkCreateImageView(device, &viewInfo, nullptr, &imageView) != VK_SUCCESS) {
-            throw std::runtime_error("failed to create image view!");
-        }
-
-        return imageView;
-    }
-
-    void createImageViews() {
-
-        swapChainImageViews.resize(swapChainImages.size());
-
-        for (uint32_t i = 0; i < swapChainImages.size(); i++) {
-            swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT);
-        }
-
-
-        //swapChainImageViews.resize(swapChainImages.size()); // to fit all img views
-        //for (size_t i = 0; i < swapChainImages.size(); i++) {
-        //    VkImageViewCreateInfo createInfo{}; // per view
-        //    createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        //    createInfo.image = swapChainImages[i]; // cur img
-        //    createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; // specifies how to treat imgs (1d tex/2d tex, etc.)
-        //    createInfo.format = swapChainImageFormat; 
-
-        //    // components can be used for channel mapping, this is the default mapping 
-        //    createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-        //    createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-        //    createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-        //    createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-        //    // img purpose and which part of img
-        //    // imgs used as COLOR TARGETS
-        //    createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        //    createInfo.subresourceRange.baseMipLevel = 0;
-        //    createInfo.subresourceRange.levelCount = 1;
-        //    createInfo.subresourceRange.baseArrayLayer = 0;
-        //    createInfo.subresourceRange.layerCount = 1; // default, not stereographic...
-
-        //    // create single image view, store in array
-        //    if (vkCreateImageView(device, &createInfo, nullptr, &swapChainImageViews[i]) != VK_SUCCESS) {
-        //        throw std::runtime_error("failed to create image views!");
-        //    }
-
-        //}
-
-    }
-
 
     void createGraphicsPipeline() {
         // retrieve spv bytecode compiled shaders
@@ -1620,7 +1395,7 @@ private:
 
     void createTextureImageView() {
         // images are accessed through image views
-        textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT);
+        textureImageView = createImageView(device, textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT);
     }
 
     void createTextureImage() {
@@ -1671,7 +1446,7 @@ private:
 
         VkFormat depthFormat = findDepthFormat();
         createImage(swapChainExtent.width, swapChainExtent.height, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, depthImage, depthImageMemory);
-        depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+        depthImageView = createImageView(device, depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
         //transitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
     }
@@ -1885,8 +1660,14 @@ private:
         graphicsQueue = deviceObj->getGraphicsQueue();
         presentQueue = deviceObj->getPresentQueue();
 
-        createSwapChain(); //  get format, present mode, extent
-        createImageViews(); // sets up using images as textures
+        swapchainObj = std::make_unique<Swapchain>(device, physicalDevice, surface, *window);
+        swapChain = swapchainObj->getSwapChain();
+        swapChainImages = swapchainObj->getImages();
+        swapChainImageFormat = swapchainObj->getImageFormat();
+        swapChainExtent = swapchainObj->getExtent();
+        swapChainImageViews = swapchainObj->getImageViews();
+
+
         createRenderPass();
         createDescriptorSetLayout();
         createGraphicsPipeline();
@@ -2017,7 +1798,15 @@ private:
         //Wait for GPU to complete excecution before cleanup
         vkDeviceWaitIdle(device);
         // CLEAN UP ALL OBJECTS BEFORE DESTROYING INSTANCE
-        cleanupSwapChain();
+        //cleanupSwapChain();
+
+        vkDestroyImageView(device, depthImageView, nullptr);
+        vkDestroyImage(device, depthImage, nullptr);
+        vkFreeMemory(device, depthImageMemory, nullptr);
+        for (auto framebuffer : swapChainFramebuffers) {
+            vkDestroyFramebuffer(device, framebuffer, nullptr);
+        }
+
 
         vkDestroySampler(device, textureSampler, nullptr);
         vkDestroyImageView(device, textureImageView, nullptr);
@@ -2068,7 +1857,7 @@ private:
 
         vkDestroyCommandPool(device, commandPool, nullptr);
 
-        //vkDestroyDevice(device, nullptr);
+        swapchainObj.reset();
         deviceObj.reset(); //Triggers device deconstructor manually calling vkDestroyDevice;
 
         vkDestroySurfaceKHR(instance, surface, nullptr);

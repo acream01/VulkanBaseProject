@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 #include <vector>
 
+
 class Device {
 public:
 	Device(VkInstance instance, VkSurfaceKHR surface,
