@@ -35,6 +35,8 @@ add_executable(VulkanBaseProject
 	src/Pipeline.cpp
 	src/Descriptors.hpp
 	src/Descriptors.cpp
+	src/Texture.hpp
+	src/Texture.cpp
 	src/Vertex.hpp
 	src/Debugging.hpp
 	src/Utils.hpp
