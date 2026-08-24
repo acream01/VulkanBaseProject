@@ -23,6 +23,10 @@ add_executable(VulkanBaseProject
 	src/ImageUtils.cpp
 	src/Swapchain.hpp
 	src/Swapchain.cpp
+	src/CommandUtils.hpp
+	src/CommandUtils.cpp
+	src/Image.hpp
+	src/Image.cpp
 	src/Vertex.hpp
 	src/Debugging.hpp
 	src/Utils.hpp
