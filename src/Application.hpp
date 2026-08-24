@@ -26,6 +26,7 @@
 #include "Pipeline.hpp"
 #include "Descriptors.hpp"
 #include "Texture.hpp"
+#include "Geometry.hpp"
 
 #include "Utils.hpp"
 #include "Config.hpp"
@@ -82,17 +83,6 @@ struct SimParams {
     float pad; // padding to 16-byte multiple
 };
 
-
-namespace std {
-    template<> struct hash<Vertex> {
-        size_t operator()(Vertex const& vertex) const {
-            return ((hash<glm::vec3>()(vertex.pos) ^
-                (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^
-                (hash<glm::vec2>()(vertex.texCoord) << 1);
-        }
-    };
-}
-
 // configuration variables to specify which layers to enable/disable
 #ifdef NDEBUG
 const bool enableValidationLayers = false;
@@ -148,19 +138,8 @@ private:
     //VkDescriptorPool descriptorPool;
     //std::vector<VkDescriptorSet> descriptorSets;
 
-
-    std::vector<Vertex> vertices;
-    std::vector<uint32_t> indices;
-    VkBuffer vertexBuffer;
-    VkDeviceMemory vertexBufferMemory;
-    VkBuffer indexBuffer;
-    VkDeviceMemory indexBufferMemory;
-
-    //std::vector<VkBuffer> uniformBuffers;
-    //std::vector<VkDeviceMemory> uniformBuffersMemory;
-    //std::vector<void*> uniformBuffersMapped;
-
-
+    //Geometry
+    std::unique_ptr<Geometry> geometryObj;
 
     //Texture Object
     std::unique_ptr<Texture> textureObj;
@@ -211,7 +190,6 @@ private:
 
     // creates instance of vulkan (connection between app and the Vulkan library)
     void createInstance() {
-
         if (enableValidationLayers && !checkValidationLayerSupport(validationLayers)) {
             throw std::runtime_error("validation layers requested, but not available!");
         }
@@ -359,8 +337,8 @@ private:
         );
 
         // --- 3) Copy positions into vertex buffer ---
-        std::vector<VkBufferCopy> copyRegions(vertices.size());
-        for (size_t i = 0; i < vertices.size(); ++i) {
+        std::vector<VkBufferCopy> copyRegions(geometryObj->getVertices().size());
+        for (size_t i = 0; i < geometryObj->getVertices().size(); ++i) {
             copyRegions[i].srcOffset = i * sizeof(glm::vec4);   // posBuffer is tightly packed vec4s
             copyRegions[i].dstOffset = i * sizeof(Vertex);      // vertexBuffer has Vertex stride
             copyRegions[i].size = sizeof(glm::vec4);       // copy full vec4 (x,y,z,w)
@@ -370,19 +348,21 @@ private:
         vkCmdCopyBuffer(
             commandBuffer,
             posBuffer,
-            vertexBuffer,
+            geometryObj->getVertexBuffer(),
             static_cast<uint32_t>(copyRegions.size()),
             copyRegions.data()
         );
 
         // --- 4) Barrier: transfer writes -> vertex input reads on vertexBuffer ---
+
+
         VkBufferMemoryBarrier vbToVertex{};
         vbToVertex.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
         vbToVertex.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         vbToVertex.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
         vbToVertex.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         vbToVertex.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        vbToVertex.buffer = vertexBuffer;
+        vbToVertex.buffer = geometryObj->getVertexBuffer();
         vbToVertex.offset = 0;
         vbToVertex.size = VK_WHOLE_SIZE;
 
@@ -436,18 +416,18 @@ private:
 
         // Send in the vertex buffer to display our triangle
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-        VkBuffer vertexBuffers[] = { vertexBuffer };
+        VkBuffer vertexBuffers[] = { geometryObj->getVertexBuffer()};
         VkDeviceSize offsets[] = { 0 };
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
 
         //vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
-        vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdBindIndexBuffer(commandBuffer, geometryObj->getIndexBuffer(), 0, VK_INDEX_TYPE_UINT32);
 
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1,
             &descriptorsObj->getDescriptorSets()[currentFrame], 0, nullptr);
         //vertecies.size() is how many vertices to draw
         //Drawing without the index buffer -> vkCmdDraw(commandBuffer, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
-        vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
+        vkCmdDrawIndexed(commandBuffer, geometryObj->getIndexCount(), 1, 0, 0, 0);
 
         vkCmdEndRenderPass(commandBuffer);
 
@@ -457,58 +437,10 @@ private:
 
     }
 
-    void createVertexBuffer() {
-        //Creates the vertex buffer
-        //-- arbitrary memory dedicated so the GPU can access it to pass vertex data along
-        VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
-
-        //We are creating the staging buffer for better preformance, staging buffer gets loaded up and then sent to the vertex buffer
-        VkBuffer stagingBuffer;
-        VkDeviceMemory stagingBufferMemory;
-        //VK_BUFFER_USAGE_TRANSFER_SRC_BIT Lets the buffer we're creating be a source for mem transfer operations
-        createBuffer(device, physicalDevice, bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-
-        //Now we need to put our data into the vertex buffer
-        void* data;
-        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-        memcpy(data, vertices.data(), (size_t)bufferSize);
-        vkUnmapMemory(device, stagingBufferMemory);
-
-        //VK_BUFFER_USAGE_TRANSFER_DST_BIT Lets the buffer we're creating be a destination for mem transfer operations
-        createBuffer(device, physicalDevice, bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
-
-        //Copying buffer for better preformence sending the vertex buffer
-        copyBuffer(device, commandPool, graphicsQueue, stagingBuffer, vertexBuffer, bufferSize);
-
-        //Cleaning up the staging buffer
-        vkDestroyBuffer(device, stagingBuffer, nullptr);
-        vkFreeMemory(device, stagingBufferMemory, nullptr);
-    }
-
-    void createIndexBuffer() {
-        //Uses staging buffer for better memory copying preformance
-        VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
-
-        VkBuffer stagingBuffer;
-        VkDeviceMemory stagingBufferMemory;
-        createBuffer(device, physicalDevice, bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
-
-        void* data;
-        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-        memcpy(data, indices.data(), (size_t)bufferSize);
-        vkUnmapMemory(device, stagingBufferMemory);
-
-        createBuffer(device, physicalDevice, bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
-
-        copyBuffer(device, commandPool, graphicsQueue, stagingBuffer, indexBuffer, bufferSize);
-
-        vkDestroyBuffer(device, stagingBuffer, nullptr);
-        vkFreeMemory(device, stagingBufferMemory, nullptr);
-
-    }
-
+    
     void createSimulationBuffers() {
         //For Compute shader simulations
+        const auto& vertices = geometryObj->getVertices();
         VkDeviceSize bufferSize = sizeof(glm::vec4) * vertices.size();
 
         // Staging buffer for initialization
@@ -717,11 +649,7 @@ private:
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
-
-  
-
     
-
     void createDepthResources() {
 
         VkFormat depthFormat = findDepthFormat(physicalDevice);
@@ -732,98 +660,6 @@ private:
         depthImageView = createImageView(device, depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
         //transitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
-    }
-
-
-    void loadModel() {
-        tinyobj::attrib_t attrib;
-        std::vector<tinyobj::shape_t> shapes;
-        std::vector<tinyobj::material_t> materials;
-        std::string warn, err;
-
-        if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, MODEL_PATH.c_str())) {
-            throw std::runtime_error(warn + err);
-        }
-
-        std::unordered_map<Vertex, uint32_t> uniqueVertices{};
-
-        std::cout << shapes.size() << "\n";
-
-        for (const auto& shape : shapes) {
-            for (const auto& index : shape.mesh.indices) {
-                Vertex vertex{};
-
-                vertex.pos = {
-                    attrib.vertices[3 * index.vertex_index + 0],
-                    attrib.vertices[3 * index.vertex_index + 1],
-                    attrib.vertices[3 * index.vertex_index + 2]
-                };
-
-                vertex.texCoord = {
-                    attrib.texcoords[2 * index.texcoord_index + 0],
-                    1.0f - attrib.texcoords[2 * index.texcoord_index + 1]
-                };
-
-                vertex.color = { 1.0f, 1.0f, 1.0f };
-
-                if (uniqueVertices.count(vertex) == 0) {
-                    uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
-                    vertices.push_back(vertex);
-                }
-
-                indices.push_back(uniqueVertices[vertex]);
-            }
-        }
-    }
-
-    void generateGrid() {
-        const uint32_t width = GRID_SIZE_X;
-        const uint32_t height = GRID_SIZE_Y;
-
-        vertices.clear();
-        indices.clear();
-        vertices.resize(width * height);
-
-        // Build vertices
-        for (uint32_t y = 0; y < height; ++y) {
-            for (uint32_t x = 0; x < width; ++x) {
-                float fx = static_cast<float>(x) / (width - 1);
-                float fy = static_cast<float>(y) / (height - 1);
-
-                Vertex v{};
-                // Local-space position on a flat plane, centered around origin
-                v.pos = glm::vec3(
-                    (fx - 0.5f) * 5.0f,   // width of ~5 units
-                    (fy - 0.5f) * 5.0f,   // height of ~5 units
-                    (fy - 0.5f + fx - 0.5f) * 5.0f //Generate with a diagonal z component to get some spin
-                );
-
-                v.color = glm::vec3(1.0f, 1.0f, 1.0f);
-                v.texCoord = glm::vec2(1 - fx, 1 - fy);
-
-                vertices[y * width + x] = v;
-            }
-        }
-
-        // Build indices (two triangles per quad)
-        for (uint32_t y = 0; y < height - 1; ++y) {
-            for (uint32_t x = 0; x < width - 1; ++x) {
-                uint32_t i0 = y * width + x;
-                uint32_t i1 = y * width + (x + 1);
-                uint32_t i2 = (y + 1) * width + x;
-                uint32_t i3 = (y + 1) * width + (x + 1);
-
-                // Triangle 1
-                indices.push_back(i0);
-                indices.push_back(i2);
-                indices.push_back(i1);
-
-                // Triangle 2
-                indices.push_back(i1);
-                indices.push_back(i2);
-                indices.push_back(i3);
-            }
-        }
     }
 
     // connects application to vulkan
@@ -872,11 +708,13 @@ private:
         //createTextureSampler();
         textureObj = std::make_unique<Texture>(device, physicalDevice, commandPool, graphicsQueue, TEXTURE_PATH);
 
-        generateGrid(); //Creates 50x50 cloth
+        
+        std::vector<Vertex> initialVertices;
+        std::vector<uint32_t> initialIndices;
+        generateGrid(GRID_SIZE_X, GRID_SIZE_Y, initialVertices, initialIndices); //Creates Cloth object
 
-        createVertexBuffer();
-        createIndexBuffer();
-
+        geometryObj = std::make_unique<Geometry>(device, physicalDevice, commandPool, graphicsQueue, initialVertices, initialIndices);
+        
         //createUniformBuffers();
         descriptorsObj = std::make_unique<Descriptors>(device, physicalDevice, descriptorSetLayout, textureObj->getImageView(), textureObj->getSampler(), MAX_FRAMES_IN_FLIGHT);
 
@@ -1010,11 +848,7 @@ private:
         descriptorsObj.reset();
         textureObj.reset();
 
-        vkDestroyBuffer(device, indexBuffer, nullptr);
-        vkFreeMemory(device, indexBufferMemory, nullptr);
-
-        vkDestroyBuffer(device, vertexBuffer, nullptr);
-        vkFreeMemory(device, vertexBufferMemory, nullptr);
+        geometryObj.reset();
 
         pipelineObj.reset();
         commandManagerObj.reset(); //Manually call decustroctor for Command Pools and Sync objects
