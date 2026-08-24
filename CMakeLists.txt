@@ -33,6 +33,8 @@ add_executable(VulkanBaseProject
 	src/CommandManager.cpp
 	src/Pipeline.hpp
 	src/Pipeline.cpp
+	src/Descriptors.hpp
+	src/Descriptors.cpp
 	src/Vertex.hpp
 	src/Debugging.hpp
 	src/Utils.hpp
