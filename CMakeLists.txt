@@ -27,6 +27,8 @@ add_executable(VulkanBaseProject
 	src/CommandUtils.cpp
 	src/Image.hpp
 	src/Image.cpp
+	src/Buffer.hpp
+	src/Buffer.cpp
 	src/Vertex.hpp
 	src/Debugging.hpp
 	src/Utils.hpp
