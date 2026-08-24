@@ -6,7 +6,6 @@
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 
-
 #include <glm/vec4.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/glm.hpp>
@@ -27,6 +26,7 @@
 #include "Descriptors.hpp"
 #include "Texture.hpp"
 #include "Geometry.hpp"
+#include "Simulation.hpp"
 
 #include "Utils.hpp"
 #include "Config.hpp"
@@ -64,24 +64,6 @@ const std::string TEXTURE_PATH = "../resources/textures/quilt.jpg";
 //const std::string TEXTURE_PATH = "../resources/textures/vox.png";
 //const std::string TEXTURE_PATH = "../resources/textures/cp.png";
 
-
-
-
-struct SimParams {
-    //16 byte
-    alignas(16) glm::vec3 gravity;
-    float particleMass;
-    //16 byte
-    float springK;
-    float restLengthVert;
-    float restLengthHoriz;
-    float restLengthDiag;
-    //16 byte
-    float dampingConst;
-    float particleInvMass;
-    float deltaT;
-    float pad; // padding to 16-byte multiple
-};
 
 // configuration variables to specify which layers to enable/disable
 #ifdef NDEBUG
@@ -154,19 +136,9 @@ private:
     VkPipeline computePipeline;
     VkPipelineLayout computePipelineLayout;
     VkDescriptorSetLayout computeDescriptorSetLayout;
-    VkDescriptorPool computeDescriptorPool;
-    VkDescriptorSet computeDescriptorSet;
-
-    // Simulation buffers for compute shader
-    VkBuffer posBuffer;
-    VkDeviceMemory posBufferMemory;
-    VkBuffer velBuffer;
-    VkDeviceMemory velBufferMemory;
-
-    //Simulation data UBO for compute shader
-    VkBuffer simParamsBuffer;
-    VkDeviceMemory simParamsBufferMemory;
-    void* simParamsMapped = nullptr;
+   
+    std::unique_ptr<Simulation> simulationObj;
+    
 
     //Semaphores and fences are the main advantage of Vulkan, gives us control of the order for all processes
     //Semaphores----
@@ -298,12 +270,13 @@ private:
 
         //Compute Pass update pos and vel
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
+        VkDescriptorSet computeSet = simulationObj->getComputeDescriptorSet();
         vkCmdBindDescriptorSets(
             commandBuffer,
             VK_PIPELINE_BIND_POINT_COMPUTE,
             computePipelineLayout,
             0, 1,
-            &computeDescriptorSet,
+            &computeSet,
             0, nullptr
         );
 
@@ -322,7 +295,7 @@ private:
         posToTransfer.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         posToTransfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         posToTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        posToTransfer.buffer = posBuffer;
+        posToTransfer.buffer = simulationObj->getPosBuffer();
         posToTransfer.offset = 0;
         posToTransfer.size = VK_WHOLE_SIZE;
 
@@ -347,7 +320,7 @@ private:
 
         vkCmdCopyBuffer(
             commandBuffer,
-            posBuffer,
+            simulationObj->getPosBuffer(),
             geometryObj->getVertexBuffer(),
             static_cast<uint32_t>(copyRegions.size()),
             copyRegions.data()
@@ -436,220 +409,7 @@ private:
         }
 
     }
-
-    
-    void createSimulationBuffers() {
-        //For Compute shader simulations
-        const auto& vertices = geometryObj->getVertices();
-        VkDeviceSize bufferSize = sizeof(glm::vec4) * vertices.size();
-
-        // Staging buffer for initialization
-        VkBuffer stagingBuffer;
-        VkDeviceMemory stagingBufferMemory;
-        createBuffer(device, physicalDevice,
-            bufferSize,
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            stagingBuffer, stagingBufferMemory
-        );
-
-        // ---- Initialize positions from vertex positions ----
-        {
-            std::vector<glm::vec4> initialPos(vertices.size());
-            for (size_t i = 0; i < vertices.size(); ++i) {
-                initialPos[i] = glm::vec4(vertices[i].pos, 1.0f);
-            }
-
-            void* data;
-            vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-            memcpy(data, initialPos.data(), (size_t)bufferSize);
-            vkUnmapMemory(device, stagingBufferMemory);
-        }
-
-        // Device-local position buffer (SSBO)
-        createBuffer(device, physicalDevice,
-            bufferSize,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            posBuffer, posBufferMemory
-        );
-        copyBuffer(device, commandPool, graphicsQueue, stagingBuffer, posBuffer, bufferSize);
-
-        // ---- Initialize velocities to zero ----
-        {
-            std::vector<glm::vec4> initialVel(vertices.size(), glm::vec4(0.0f));
-            void* data;
-            vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-            memcpy(data, initialVel.data(), (size_t)bufferSize);
-            vkUnmapMemory(device, stagingBufferMemory);
-        }
-
-        createBuffer(device, physicalDevice,
-            bufferSize,
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            velBuffer, velBufferMemory
-        );
-        copyBuffer(device, commandPool, graphicsQueue, stagingBuffer, velBuffer, bufferSize);
-
-        vkDestroyBuffer(device, stagingBuffer, nullptr);
-        vkFreeMemory(device, stagingBufferMemory, nullptr);
-    }
-
-
-    void createComputeDescriptorSetLayout() {
-        std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
-
-        // binding 0: SimParams UBO
-        bindings[0].binding = 0;
-        bindings[0].descriptorCount = 1;
-        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        bindings[0].pImmutableSamplers = nullptr;
-        bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-        // binding 1: positions SSBO
-        bindings[1].binding = 1;
-        bindings[1].descriptorCount = 1;
-        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        bindings[1].pImmutableSamplers = nullptr;
-        bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-        // binding 2: velocities SSBO
-        bindings[2].binding = 2;
-        bindings[2].descriptorCount = 1;
-        bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        bindings[2].pImmutableSamplers = nullptr;
-        bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
-        VkDescriptorSetLayoutCreateInfo info{};
-        info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        info.bindingCount = static_cast<uint32_t>(bindings.size());
-        info.pBindings = bindings.data();
-
-        if (vkCreateDescriptorSetLayout(device, &info, nullptr, &computeDescriptorSetLayout) != VK_SUCCESS) {
-            throw std::runtime_error("failed to create compute descriptor set layout!");
-        }
-    }
-
-
-    
-
-    void createSimParamsBuffer() {
-        VkDeviceSize size = sizeof(SimParams);
-        createBuffer(device, physicalDevice,
-            size,
-            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            simParamsBuffer, simParamsBufferMemory
-        );
-        vkMapMemory(device, simParamsBufferMemory, 0, size, 0, &simParamsMapped);
-    }
-
-    void updateSimParams() {
-        SimParams params{};
-
-        float extent = 5.0f;
-        float dx = extent / (GRID_SIZE_X - 1);
-        float dy = extent / (GRID_SIZE_Y - 1);
-        float restHoriz = dx;
-        float restVert = dy;
-        float restDiag = glm::length(glm::vec2(dx, dy));
-
-        params.gravity = glm::vec3(0.0f, -9.8f * flipGrav, 0.0f);
-        params.particleMass = 1.0f;
-        params.springK = 500.0f;
-        params.restLengthVert = restVert;
-        params.restLengthHoriz = restHoriz;
-        params.restLengthDiag = restDiag;
-        params.dampingConst = 0.5f;
-        params.particleInvMass = 1.0f / params.particleMass;
-        params.deltaT = 0.016f; // ~60 FPS fixed timestep
-        //params.deltaT = 0.02f; // ~60 FPS fixed timestep
-
-
-        memcpy(simParamsMapped, &params, sizeof(params));
-    }
-
-    
-
-    void createComputeDescriptorPool() {
-        std::array<VkDescriptorPoolSize, 3> poolSizes{};
-
-        poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSizes[0].descriptorCount = 1;
-
-        poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        poolSizes[1].descriptorCount = 1;
-
-        poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        poolSizes[2].descriptorCount = 1;
-
-        VkDescriptorPoolCreateInfo poolInfo{};
-        poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-        poolInfo.pPoolSizes = poolSizes.data();
-        poolInfo.maxSets = 1;
-
-        if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &computeDescriptorPool) != VK_SUCCESS) {
-            throw std::runtime_error("failed to create compute descriptor pool!");
-        }
-    }
-
-    void createComputeDescriptorSet() {
-        VkDescriptorSetAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        allocInfo.descriptorPool = computeDescriptorPool;
-        allocInfo.descriptorSetCount = 1;
-        allocInfo.pSetLayouts = &computeDescriptorSetLayout;
-
-        if (vkAllocateDescriptorSets(device, &allocInfo, &computeDescriptorSet) != VK_SUCCESS) {
-            throw std::runtime_error("failed to allocate compute descriptor set!");
-        }
-
-        VkDescriptorBufferInfo simInfo{};
-        simInfo.buffer = simParamsBuffer;
-        simInfo.offset = 0;
-        simInfo.range = sizeof(SimParams);
-
-        VkDescriptorBufferInfo posInfo{};
-        posInfo.buffer = posBuffer;
-        posInfo.offset = 0;
-        posInfo.range = VK_WHOLE_SIZE;
-
-        VkDescriptorBufferInfo velInfo{};
-        velInfo.buffer = velBuffer;
-        velInfo.offset = 0;
-        velInfo.range = VK_WHOLE_SIZE;
-
-        std::array<VkWriteDescriptorSet, 3> writes{};
-
-        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet = computeDescriptorSet;
-        writes[0].dstBinding = 0;
-        writes[0].dstArrayElement = 0;
-        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        writes[0].descriptorCount = 1;
-        writes[0].pBufferInfo = &simInfo;
-
-        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet = computeDescriptorSet;
-        writes[1].dstBinding = 1;
-        writes[1].dstArrayElement = 0;
-        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[1].descriptorCount = 1;
-        writes[1].pBufferInfo = &posInfo;
-
-        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[2].dstSet = computeDescriptorSet;
-        writes[2].dstBinding = 2;
-        writes[2].dstArrayElement = 0;
-        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[2].descriptorCount = 1;
-        writes[2].pBufferInfo = &velInfo;
-
-        vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
-    }
-    
+        
     void createDepthResources() {
 
         VkFormat depthFormat = findDepthFormat(physicalDevice);
@@ -681,7 +441,7 @@ private:
         swapChainImageViews = swapchainObj->getImageViews();
 
         descriptorSetLayout = createDescriptorSetLayout(device);
-        createComputeDescriptorSetLayout();
+        computeDescriptorSetLayout = createComputeDescriptorSetLayout(device);
 
         //createGraphicsPipeline();
         pipelineObj = std::make_unique<Pipeline>(device, physicalDevice, swapChainImageFormat, descriptorSetLayout, computeDescriptorSetLayout);
@@ -718,12 +478,9 @@ private:
         //createUniformBuffers();
         descriptorsObj = std::make_unique<Descriptors>(device, physicalDevice, descriptorSetLayout, textureObj->getImageView(), textureObj->getSampler(), MAX_FRAMES_IN_FLIGHT);
 
-        createSimulationBuffers(); //Compute Shader vertex and velocity data 
-        createSimParamsBuffer(); //UBO data like Gravity, Spring Constant, ETC.
 
-        //Compute Shader stuff
-        createComputeDescriptorPool();
-        createComputeDescriptorSet();
+        simulationObj = std::make_unique<Simulation>(device, physicalDevice, commandPool, graphicsQueue,
+            geometryObj->getVertices(), GRID_SIZE_X, GRID_SIZE_Y, computeDescriptorSetLayout);
     }
 
     // renders a single frame 
@@ -754,7 +511,7 @@ private:
 
         //Updates the MVP for model changes w/ time
         descriptorsObj->updateUniformBuffer(currentFrame, swapChainExtent, clothSpinning);
-        updateSimParams();
+        simulationObj->updateSimParams(flipGrav);
 
         // Only reset the fence if we are submitting work
         vkResetFences(device, 1, &inFlightFences[currentFrame]);
@@ -832,22 +589,11 @@ private:
         
         //Cleanup compute
         vkDestroyDescriptorSetLayout(device, computeDescriptorSetLayout, nullptr);
-        vkDestroyDescriptorPool(device, computeDescriptorPool, nullptr);
-
-        vkDestroyBuffer(device, posBuffer, nullptr);
-        vkFreeMemory(device, posBufferMemory, nullptr);
-
-        vkDestroyBuffer(device, velBuffer, nullptr);
-        vkFreeMemory(device, velBufferMemory, nullptr);
-
-        vkDestroyBuffer(device, simParamsBuffer, nullptr);
-        vkFreeMemory(device, simParamsBufferMemory, nullptr);
-
-        
+              
         vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
         descriptorsObj.reset();
         textureObj.reset();
-
+        simulationObj.reset();
         geometryObj.reset();
 
         pipelineObj.reset();

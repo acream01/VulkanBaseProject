@@ -39,6 +39,8 @@ add_executable(VulkanBaseProject
 	src/Texture.cpp
 	src/Geometry.hpp
 	src/Geometry.cpp
+	src/Simulation.hpp
+	src/Simulation.cpp
 	src/Vertex.hpp
 	src/Debugging.hpp
 	src/Utils.hpp
