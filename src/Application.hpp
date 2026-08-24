@@ -22,6 +22,7 @@
 #include "Swapchain.hpp"
 #include "Image.hpp"
 #include "Buffer.hpp"
+#include "CommandManager.hpp"
 
 #include "Utils.hpp"
 #include "Config.hpp"
@@ -140,6 +141,9 @@ private:
     VkPipeline graphicsPipeline;
     // buffers and memory-----------
     std::vector<VkFramebuffer> swapChainFramebuffers; // holds the framebuffers
+    
+    //Commands, CommandPools and Buffers
+    std::unique_ptr<CommandManager> commandManagerObj;
     VkCommandPool commandPool;
     std::vector<VkCommandBuffer> commandBuffers;
 
@@ -621,20 +625,6 @@ private:
         }
     }
 
-    // allows us to make draw calls
-    void createCommandPool() {
-        QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice, surface);
-
-        VkCommandPoolCreateInfo poolInfo{};
-        poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
-
-        if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
-            throw std::runtime_error("failed to create command pool!");
-        }
-
-    }
 
     void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
         VkCommandBufferBeginInfo beginInfo{};
@@ -783,56 +773,6 @@ private:
         }
 
     }
-
-    // specifies the command pool and number of buffers to allocate
-    void createCommandBuffers() {
-        commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-
-        VkCommandBufferAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocInfo.commandPool = commandPool; // spec
-        // can be submitted to a queue for execution, but cannot be called from other command buffers.
-        // VK_COMMAND_BUFFER_LEVEL_SECONDARY lets you reuse common operations
-        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandBufferCount = (uint32_t)commandBuffers.size(); // num buffers
-
-        if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
-            throw std::runtime_error("failed to allocate command buffers!");
-        }
-    }
-
-    void createSyncObjects() {
-        imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-        renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-        inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
-
-
-        //Creating Syncronization semephores and fences
-        //Populating semaphore struct
-        VkSemaphoreCreateInfo semaphoreInfo{};
-        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
-        //Populating fenceInfo struct
-        VkFenceCreateInfo fenceInfo{};
-        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-        /* Okay so... Because we check the fence on the first draw call before we ever interact with the fence
-        * we will run into a problem where we are stuck waiting at the first draw. The create signaled bit means
-        * we are creating the fence in the signaled state so that on the first drawFrame call we are chilling
-        * and can pass -A
-        */
-
-        //Creating the 2 semaphores and 1 fence
-        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) { // size_t always unsigned, 
-            if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
-                vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
-                vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS) {
-                throw std::runtime_error("failed to create semaphores!");
-            }
-        }
-
-    }
-
 
     void createVertexBuffer() {
         //Creates the vertex buffer
@@ -1443,7 +1383,14 @@ private:
         createDescriptorSetLayout();
         createGraphicsPipeline();
 
-        createCommandPool();
+        //createCommandPool();
+        commandManagerObj = std::make_unique<CommandManager>(device, physicalDevice, surface, MAX_FRAMES_IN_FLIGHT);
+        commandPool = commandManagerObj->getCommandPool();
+        commandBuffers = commandManagerObj->getCommandBuffers();
+        imageAvailableSemaphores = commandManagerObj->getImageAvailableSemaphores();
+        renderFinishedSemaphores = commandManagerObj->getRenderFinishedSemaphores();
+        inFlightFences = commandManagerObj->getInFlightFences();
+
         createDepthResources();
         createFramebuffers();
         createTextureImage();
@@ -1468,9 +1415,6 @@ private:
         createComputePipeline();
         createComputeDescriptorPool();
         createComputeDescriptorSet();
-
-        createCommandBuffers();
-        createSyncObjects();
     }
 
     // renders a single frame 
@@ -1569,8 +1513,6 @@ private:
         //Wait for GPU to complete excecution before cleanup
         vkDeviceWaitIdle(device);
         // CLEAN UP ALL OBJECTS BEFORE DESTROYING INSTANCE
-        //cleanupSwapChain();
-
         vkDestroyImageView(device, depthImageView, nullptr);
         vkDestroyImage(device, depthImage, nullptr);
         vkFreeMemory(device, depthImageMemory, nullptr);
@@ -1619,16 +1561,8 @@ private:
         vkDestroyBuffer(device, vertexBuffer, nullptr);
         vkFreeMemory(device, vertexBufferMemory, nullptr);
 
-        //No more syncronization necessary
-        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-            vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
-            vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
-            vkDestroyFence(device, inFlightFences[i], nullptr);
-        }
-
-        vkDestroyCommandPool(device, commandPool, nullptr);
-
-        swapchainObj.reset();
+        commandManagerObj.reset(); //Manually call decustroctor for Command Pools and Sync objects
+        swapchainObj.reset(); //Manually call deconstructor for swapchain
         deviceObj.reset(); //Triggers device deconstructor manually calling vkDestroyDevice;
 
         vkDestroySurfaceKHR(instance, surface, nullptr);
