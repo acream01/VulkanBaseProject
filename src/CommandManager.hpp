@@ -23,11 +23,19 @@ private:
 
     VkCommandPool commandPool;
     std::vector<VkCommandBuffer> commandBuffers;
+    //Semaphores and fences are the main advantage of Vulkan, gives us control of the order for all processes
+    //Semaphores----
+    // Semphores are signals between async gpu processes used to decide what order things 
     std::vector<VkSemaphore> imageAvailableSemaphores;
     std::vector<VkSemaphore> renderFinishedSemaphores;
+
+    //Fences
+    //Fences are used to pause the CPU until a GPU process is complete used 
     std::vector<VkFence> inFlightFences;
 
     void createCommandPool(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface);
     void createCommandBuffers();
     void createSyncObjects();
 };
+
+

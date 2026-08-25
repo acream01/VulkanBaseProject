@@ -34,8 +34,6 @@
 #include "ImageUtils.hpp"
 #include "CommandUtils.hpp"
 
-//#include "Types.hpp"
-
 #include <chrono>
 #include <iostream>
 #include <stdexcept>
@@ -50,19 +48,6 @@
 #include <fstream> // Necessary for file management
 #include <array>
 #include <memory>
-
-const int MAX_FRAMES_IN_FLIGHT = 2;
-
-const uint32_t GRID_SIZE_X = 50;
-const uint32_t GRID_SIZE_Y = 50;
-
-const std::string MODEL_PATH = "../resources/models/clothplane.obj";
-//const std::string MODEL_PATH = "../resources/models/sphereWTex.obj";
-
-const std::string TEXTURE_PATH = "../resources/textures/quilt.jpg";
-//const std::string TEXTURE_PATH = "../resources/textures/horse.png";
-//const std::string TEXTURE_PATH = "../resources/textures/vox.png";
-//const std::string TEXTURE_PATH = "../resources/textures/cp.png";
 
 
 // configuration variables to specify which layers to enable/disable
@@ -87,67 +72,28 @@ private:
     VkInstance instance;
     VkSurfaceKHR surface; // window surface to screen
     
-    //device
     std::unique_ptr<Device> deviceObj;
-    VkDevice device;
-    VkPhysicalDevice physicalDevice;
-    VkQueue graphicsQueue;
-    VkQueue presentQueue;
-
-    // swapchain-------------
-    std::unique_ptr<Swapchain> swapchainObj;
-    VkSwapchainKHR swapChain; //Swap chain is how vulkan handles the frames in order- framebuffer settings and vsync settings etc
-    std::vector<VkImage> swapChainImages;
-    VkFormat swapChainImageFormat;
-    VkExtent2D swapChainExtent;
-    std::vector<VkImageView> swapChainImageViews;
-
-    // pipeline----------------
+    std::unique_ptr<Swapchain> swapchainObj; //Swap chain is how vulkan handles the frames in order- framebuffer settings and vsync settings etc    
     std::unique_ptr<Pipeline> pipelineObj;
-    VkRenderPass renderPass;
+    std::unique_ptr<CommandManager> commandManagerObj;
+    std::unique_ptr<Descriptors> descriptorsObj;
+    std::unique_ptr<Geometry> geometryObj;
+    std::unique_ptr<Texture> textureObj;
+    std::unique_ptr<Simulation> simulationObj;
+
+    VkDescriptorSetLayout computeDescriptorSetLayout;
     VkDescriptorSetLayout descriptorSetLayout; // UBO descriptor sets for passing info like MVP matrices
-    VkPipelineLayout pipelineLayout;
-    VkPipeline graphicsPipeline;
+    
     // buffers and memory-----------
     std::vector<VkFramebuffer> swapChainFramebuffers; // holds the framebuffers
     
     //Commands, CommandPools and Buffers
-    std::unique_ptr<CommandManager> commandManagerObj;
-    VkCommandPool commandPool;
-    std::vector<VkCommandBuffer> commandBuffers;
-
-    std::unique_ptr<Descriptors> descriptorsObj;
-    //VkDescriptorPool descriptorPool;
-    //std::vector<VkDescriptorSet> descriptorSets;
-
-    //Geometry
-    std::unique_ptr<Geometry> geometryObj;
-
-    //Texture Object
-    std::unique_ptr<Texture> textureObj;
-
-
+    
     // depth buffering
     VkImage depthImage;
     VkDeviceMemory depthImageMemory;
     VkImageView depthImageView;
-
-    // compute shader resources
-    VkPipeline computePipeline;
-    VkPipelineLayout computePipelineLayout;
-    VkDescriptorSetLayout computeDescriptorSetLayout;
-   
-    std::unique_ptr<Simulation> simulationObj;
     
-
-    //Semaphores and fences are the main advantage of Vulkan, gives us control of the order for all processes
-    //Semaphores----
-    // Semphores are signals between async gpu processes used to decide what order things happen
-    std::vector<VkSemaphore> imageAvailableSemaphores;
-    std::vector<VkSemaphore> renderFinishedSemaphores;
-    //Fences
-    //Fences are used to pause the CPU until a GPU process is complete used 
-    std::vector<VkFence> inFlightFences;
     uint32_t currentFrame = 0;
     
     const std::vector<const char*> deviceExtensions = {
@@ -237,14 +183,10 @@ private:
     }
 
     void recreateSwapChain() {
-        swapchainObj->recreate();
-        swapChain = swapchainObj->getSwapChain();
-        swapChainImages = swapchainObj->getImages();
-        swapChainImageFormat = swapchainObj->getImageFormat();
-        swapChainExtent = swapchainObj->getExtent();
-        swapChainImageViews = swapchainObj->getImageViews();
+        VkDevice device = deviceObj->getDevice();
 
-        //Destroy old depth resources and framebuffers before creating new ones
+        swapchainObj->recreate();
+
         vkDestroyImageView(device, depthImageView, nullptr);
         vkDestroyImage(device, depthImage, nullptr);
         vkFreeMemory(device, depthImageMemory, nullptr);
@@ -254,11 +196,19 @@ private:
         }
 
         createDepthResources();
-        swapChainFramebuffers = createFramebuffers(device, renderPass, swapChainImageViews, depthImageView, swapChainExtent);
+        swapChainFramebuffers = createFramebuffers(device, pipelineObj->getRenderPass(),
+            swapchainObj->getImageViews(), depthImageView, swapchainObj->getExtent());
     }
 
 
     void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex) {
+        VkExtent2D swapChainExtent = swapchainObj->getExtent();
+        VkRenderPass renderPass = pipelineObj->getRenderPass();
+        VkPipeline graphicsPipeline = pipelineObj->getGraphicsPipeline();
+        VkPipelineLayout pipelineLayout = pipelineObj->getPipelineLayout();
+        VkPipeline computePipeline = pipelineObj->getComputePipeline();
+        VkPipelineLayout computePipelineLayout = pipelineObj->getComputePipelineLayout();
+
         VkCommandBufferBeginInfo beginInfo{};
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         beginInfo.flags = 0; // how to use command buffer
@@ -411,6 +361,9 @@ private:
     }
         
     void createDepthResources() {
+        VkDevice device = deviceObj->getDevice();
+        VkPhysicalDevice physicalDevice = deviceObj->getPhysicalDevice();
+        VkExtent2D swapChainExtent = swapchainObj->getExtent();
 
         VkFormat depthFormat = findDepthFormat(physicalDevice);
         createImage(device, physicalDevice, swapChainExtent.width, 
@@ -428,40 +381,28 @@ private:
         createSurface(); // platform agnostic with GLFW, using Window class
         
         deviceObj = std::make_unique<Device>(instance, surface, deviceExtensions, validationLayers, enableValidationLayers);
-        device = deviceObj->getDevice();
-        physicalDevice = deviceObj->getPhysicalDevice();
-        graphicsQueue = deviceObj->getGraphicsQueue();
-        presentQueue = deviceObj->getPresentQueue();
+        VkDevice device = deviceObj->getDevice();
+        VkPhysicalDevice physicalDevice = deviceObj->getPhysicalDevice();
+        VkQueue graphicsQueue = deviceObj->getGraphicsQueue();
+        
 
         swapchainObj = std::make_unique<Swapchain>(device, physicalDevice, surface, *window);
-        swapChain = swapchainObj->getSwapChain();
-        swapChainImages = swapchainObj->getImages();
-        swapChainImageFormat = swapchainObj->getImageFormat();
-        swapChainExtent = swapchainObj->getExtent();
-        swapChainImageViews = swapchainObj->getImageViews();
-
+        
         descriptorSetLayout = createDescriptorSetLayout(device);
         computeDescriptorSetLayout = createComputeDescriptorSetLayout(device);
 
         //createGraphicsPipeline();
-        pipelineObj = std::make_unique<Pipeline>(device, physicalDevice, swapChainImageFormat, descriptorSetLayout, computeDescriptorSetLayout);
-        renderPass = pipelineObj->getRenderPass();
-        pipelineLayout = pipelineObj->getPipelineLayout();
-        graphicsPipeline = pipelineObj->getGraphicsPipeline();
-        computePipelineLayout = pipelineObj->getComputePipelineLayout();
-        computePipeline = pipelineObj->getComputePipeline();
-
+        pipelineObj = std::make_unique<Pipeline>(device, physicalDevice, swapchainObj->getImageFormat(),
+            descriptorSetLayout, computeDescriptorSetLayout);
+        
 
         //createCommandPool();
         commandManagerObj = std::make_unique<CommandManager>(device, physicalDevice, surface, MAX_FRAMES_IN_FLIGHT);
-        commandPool = commandManagerObj->getCommandPool();
-        commandBuffers = commandManagerObj->getCommandBuffers();
-        imageAvailableSemaphores = commandManagerObj->getImageAvailableSemaphores();
-        renderFinishedSemaphores = commandManagerObj->getRenderFinishedSemaphores();
-        inFlightFences = commandManagerObj->getInFlightFences();
-
+        VkCommandPool commandPool = commandManagerObj->getCommandPool();
+       
         createDepthResources();
-        swapChainFramebuffers = createFramebuffers(device, renderPass, swapChainImageViews, depthImageView, swapChainExtent);
+        swapChainFramebuffers = createFramebuffers(device, pipelineObj->getRenderPass(),
+            swapchainObj->getImageViews(), depthImageView, swapchainObj->getExtent());
 
         //createTextureImage();
         //createTextureImageView();
@@ -494,6 +435,16 @@ private:
     void drawFrame() {
         //Pause CPU until fences are cleared so we have the async info we need to continue
         //Note: we need to create the fence signaled already so the first drawFrame call can get past this step
+        VkDevice device = deviceObj->getDevice();
+        VkQueue graphicsQueue = deviceObj->getGraphicsQueue();
+        VkQueue presentQueue = deviceObj->getPresentQueue();
+        VkSwapchainKHR swapChain = swapchainObj->getSwapChain();
+        const auto& commandBuffers = commandManagerObj->getCommandBuffers();
+        const auto& imageAvailableSemaphores = commandManagerObj->getImageAvailableSemaphores();
+        const auto& renderFinishedSemaphores = commandManagerObj->getRenderFinishedSemaphores();
+        const auto& inFlightFences = commandManagerObj->getInFlightFences();
+
+        
         vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
 
         //Getting the next frame from the swap chain:
@@ -510,7 +461,7 @@ private:
         }
 
         //Updates the MVP for model changes w/ time
-        descriptorsObj->updateUniformBuffer(currentFrame, swapChainExtent, clothSpinning);
+        descriptorsObj->updateUniformBuffer(currentFrame, swapchainObj->getExtent(), clothSpinning);
         simulationObj->updateSimParams(flipGrav);
 
         // Only reset the fence if we are submitting work
@@ -577,6 +528,7 @@ private:
 
     void cleanup() {
         //Wait for GPU to complete excecution before cleanup
+        VkDevice device = deviceObj->getDevice();
         vkDeviceWaitIdle(device);
         // CLEAN UP ALL OBJECTS BEFORE DESTROYING INSTANCE
         vkDestroyImageView(device, depthImageView, nullptr);
